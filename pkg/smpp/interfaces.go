@@ -150,14 +150,17 @@ type SMSStorage interface {
 	// GetSMS retrieves an SMS message by ID
 	GetSMS(ctx context.Context, messageID string) (*Message, error)
 
+	// UpdateSMS updates an SMS message
+	UpdateSMS(ctx context.Context, message *Message) error
+
 	// UpdateSMSStatus updates the status of an SMS message
 	UpdateSMSStatus(ctx context.Context, messageID string, status MessageStatus) error
 
-	// SearchSMS searches for SMS messages based on criteria
-	SearchSMS(ctx context.Context, criteria *SMSSearchCriteria) ([]*Message, error)
-
 	// DeleteSMS deletes an SMS message
 	DeleteSMS(ctx context.Context, messageID string) error
+
+	// SearchSMS searches for SMS messages based on criteria
+	SearchSMS(ctx context.Context, criteria *SMSSearchCriteria) ([]*Message, error)
 
 	// GetSMSByDateRange retrieves SMS messages within a date range
 	GetSMSByDateRange(ctx context.Context, from, to time.Time) ([]*Message, error)
@@ -215,6 +218,21 @@ type UserAuth interface {
 type MessageHandler interface {
 	// HandleSubmitSM processes a submit_sm PDU
 	HandleSubmitSM(ctx context.Context, session *Session, pdu *SubmitSM) (*SubmitSMResp, error)
+
+	// HandleQuerySM processes a query_sm PDU
+	HandleQuerySM(ctx context.Context, session *Session, pdu *QuerySM) (*QuerySMResp, error)
+
+	// HandleReplaceSM processes a replace_sm PDU
+	HandleReplaceSM(ctx context.Context, session *Session, pdu *ReplaceSM) (*ReplaceSMResp, error)
+
+	// HandleCancelSM processes a cancel_sm PDU
+	HandleCancelSM(ctx context.Context, session *Session, pdu *CancelSM) (*CancelSMResp, error)
+
+	// HandleSubmitMulti processes a submit_multi PDU
+	HandleSubmitMulti(ctx context.Context, session *Session, pdu *SubmitMulti) (*SubmitMultiResp, error)
+
+	// HandleDataSM processes a data_sm PDU
+	HandleDataSM(ctx context.Context, session *Session, pdu *DataSM) (*DataSMResp, error)
 
 	// HandleDeliverSM processes a deliver_sm PDU
 	HandleDeliverSM(ctx context.Context, session *Session, pdu *DeliverSM) (*DeliverSMResp, error)

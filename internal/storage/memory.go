@@ -73,6 +73,32 @@ func (s *InMemorySMSStorage) GetSMS(ctx context.Context, messageID string) (*smp
 	return &messageCopy, nil
 }
 
+// UpdateSMS updates an SMS message
+func (s *InMemorySMSStorage) UpdateSMS(ctx context.Context, message *smpp.Message) error {
+	if message == nil || message.ID == "" {
+		return fmt.Errorf("message and message ID cannot be empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, exists := s.messages[message.ID]
+	if !exists {
+		return fmt.Errorf("message with ID %s not found", message.ID)
+	}
+
+	// Store a copy to avoid external modifications
+	messageCopy := *message
+	s.messages[message.ID] = &messageCopy
+
+	if s.logger != nil {
+		s.logger.Debug("SMS updated",
+			"message_id", message.ID)
+	}
+
+	return nil
+}
+
 // UpdateSMSStatus updates the status of an SMS message
 func (s *InMemorySMSStorage) UpdateSMSStatus(ctx context.Context, messageID string, status smpp.MessageStatus) error {
 	if messageID == "" {

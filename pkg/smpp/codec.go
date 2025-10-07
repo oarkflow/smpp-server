@@ -302,6 +302,96 @@ func (b *PDUBuilder) BuildSubmitSMResp(messageID string, sequenceNum uint32, sta
 	}
 }
 
+// BuildQuerySMResp builds a query_sm_resp PDU
+func (b *PDUBuilder) BuildQuerySMResp(messageID CString, finalDate string, messageState, errorCode uint8, sequenceNum uint32, status uint32) *PDU {
+	finalDateCStr := NewCString(17)
+	finalDateCStr.SetString(finalDate)
+
+	body := &QuerySMResp{
+		MessageID:    messageID,
+		FinalDate:    *finalDateCStr,
+		MessageState: messageState,
+		ErrorCode:    errorCode,
+	}
+
+	return &PDU{
+		Header: PDUHeader{
+			CommandID:     CommandQuerySMResp,
+			CommandStatus: status,
+			SequenceNum:   sequenceNum,
+		},
+		Body: body,
+	}
+}
+
+// BuildReplaceSMResp builds a replace_sm_resp PDU
+func (b *PDUBuilder) BuildReplaceSMResp(sequenceNum uint32, status uint32) *PDU {
+	body := &ReplaceSMResp{}
+
+	return &PDU{
+		Header: PDUHeader{
+			CommandID:     CommandReplaceSMResp,
+			CommandStatus: status,
+			SequenceNum:   sequenceNum,
+		},
+		Body: body,
+	}
+}
+
+// BuildCancelSMResp builds a cancel_sm_resp PDU
+func (b *PDUBuilder) BuildCancelSMResp(sequenceNum uint32, status uint32) *PDU {
+	body := &CancelSMResp{}
+
+	return &PDU{
+		Header: PDUHeader{
+			CommandID:     CommandCancelSMResp,
+			CommandStatus: status,
+			SequenceNum:   sequenceNum,
+		},
+		Body: body,
+	}
+}
+
+// BuildSubmitMultiResp builds a submit_multi_resp PDU
+func (b *PDUBuilder) BuildSubmitMultiResp(messageID string, unsuccessfulSMEs []UnsuccessfulSME, sequenceNum uint32, status uint32) *PDU {
+	messageIDCStr := NewCString(65)
+	messageIDCStr.SetString(messageID)
+
+	body := &SubmitMultiResp{
+		MessageID:    *messageIDCStr,
+		NoUnsuccess:  uint8(len(unsuccessfulSMEs)),
+		UnsuccessSME: unsuccessfulSMEs,
+	}
+
+	return &PDU{
+		Header: PDUHeader{
+			CommandID:     CommandSubmitMultiResp,
+			CommandStatus: status,
+			SequenceNum:   sequenceNum,
+		},
+		Body: body,
+	}
+}
+
+// BuildDataSMResp builds a data_sm_resp PDU
+func (b *PDUBuilder) BuildDataSMResp(messageID string, sequenceNum uint32, status uint32) *PDU {
+	messageIDCStr := NewCString(65)
+	messageIDCStr.SetString(messageID)
+
+	body := &DataSMResp{
+		MessageID: *messageIDCStr,
+	}
+
+	return &PDU{
+		Header: PDUHeader{
+			CommandID:     CommandDataSMResp,
+			CommandStatus: status,
+			SequenceNum:   sequenceNum,
+		},
+		Body: body,
+	}
+}
+
 // BuildDeliverSM builds a deliver_sm PDU
 func (b *PDUBuilder) BuildDeliverSM(sourceAddr, destAddr string, message []byte, dataCoding uint8) *PDU {
 	body := &DeliverSM{

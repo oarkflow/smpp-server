@@ -217,6 +217,524 @@ func (mh *MessageHandlerImpl) HandleSubmitSM(ctx context.Context, session *Sessi
 	return &SubmitSMResp{MessageID: messageID}, nil
 }
 
+// HandleQuerySM processes a query_sm PDU
+func (mh *MessageHandlerImpl) HandleQuerySM(ctx context.Context, session *Session, pdu *QuerySM) (*QuerySMResp, error) {
+	messageID := pdu.MessageID.GetString()
+
+	if mh.logger != nil {
+		mh.logger.Info("Received query_sm",
+			"session_id", session.ID,
+			"message_id", messageID,
+			"source_addr", pdu.SourceAddr.Addr)
+	}
+
+	// Get message from storage
+	_, err := mh.smsStorage.GetSMS(ctx, messageID)
+	if err != nil {
+		if mh.logger != nil {
+			mh.logger.Warn("Message not found for query",
+				"message_id", messageID,
+				"error", err)
+		}
+		emptyDate := NewCString(17) // Max length for date string
+		return &QuerySMResp{
+			MessageID:    pdu.MessageID,
+			FinalDate:    *emptyDate,
+			MessageState: 2, // MessageStateExpired (message not found)
+			ErrorCode:    1, // Error code for message not found
+		}, nil
+	}
+
+	// Get delivery report if available
+	report, err := mh.reportStorage.GetReport(ctx, messageID)
+	messageState := uint8(1) // MessageStateEnroute (default)
+	errorCode := uint8(0)
+
+	if err == nil && report != nil {
+		// Map delivery status to message state
+		switch report.Status {
+		case "DELIVRD":
+			messageState = 3 // MessageStateDelivered
+		case "EXPIRED":
+			messageState = 2 // MessageStateExpired
+		case "DELETED":
+			messageState = 4 // MessageStateDeleted
+		case "UNDELIV":
+			messageState = 5 // MessageStateUndeliverable
+		case "ACCEPTD":
+			messageState = 1 // MessageStateEnroute
+		case "UNKNOWN":
+			messageState = 7 // MessageStateUnknown
+		case "REJECTD":
+			messageState = 6 // MessageStateRejected
+		default:
+			messageState = 1 // MessageStateEnroute
+		}
+
+		// Set error code if present
+		if report.Error != "" {
+			if code, parseErr := strconv.Atoi(report.Error); parseErr == nil {
+				errorCode = uint8(code)
+			}
+		}
+	}
+
+	// Format final date
+	finalDateStr := ""
+	if report != nil && !report.DoneTime.IsZero() {
+		finalDateStr = report.DoneTime.Format("0601021504") // YYMMDDHHMM format
+	}
+	finalDate := NewCString(17)
+	finalDate.SetString(finalDateStr)
+
+	return &QuerySMResp{
+		MessageID:    pdu.MessageID,
+		FinalDate:    *finalDate,
+		MessageState: messageState,
+		ErrorCode:    errorCode,
+	}, nil
+}
+
+// HandleReplaceSM processes a replace_sm PDU
+func (mh *MessageHandlerImpl) HandleReplaceSM(ctx context.Context, session *Session, pdu *ReplaceSM) (*ReplaceSMResp, error) {
+	messageID := pdu.MessageID.GetString()
+
+	if mh.logger != nil {
+		mh.logger.Info("Received replace_sm",
+			"session_id", session.ID,
+			"message_id", messageID,
+			"source_addr", pdu.SourceAddr.Addr)
+	}
+
+	// Get the original message
+	message, err := mh.smsStorage.GetSMS(ctx, messageID)
+	if err != nil {
+		if mh.logger != nil {
+			mh.logger.Warn("Message not found for replacement",
+				"message_id", messageID,
+				"error", err)
+		}
+		return &ReplaceSMResp{}, nil // Empty response for not found
+	}
+
+	// Check if message can be replaced (must be in enroute state)
+	report, _ := mh.reportStorage.GetReport(ctx, messageID)
+	if report != nil && report.Status != "ACCEPTD" && report.Status != "ENROUTE" {
+		if mh.logger != nil {
+			mh.logger.Warn("Message cannot be replaced - not in enroute state",
+				"message_id", messageID,
+				"status", report.Status)
+		}
+		return &ReplaceSMResp{}, nil
+	}
+
+	// Update the message with new content
+	message.Text = string(pdu.ShortMessage)
+	message.DataCoding = pdu.SMDefaultMsgID // Use SMDefaultMsgID as data coding
+
+	// Update schedule delivery time if provided
+	if scheduleTime := pdu.ScheduleDeliveryTime.GetString(); scheduleTime != "" {
+		message.ScheduleDeliveryTime = scheduleTime
+	}
+
+	// Update validity period if provided
+	if validityPeriod := pdu.ValidityPeriod.GetString(); validityPeriod != "" {
+		message.ValidityPeriod = validityPeriod
+	}
+
+	// Update registered delivery
+	message.RegisteredDelivery = pdu.RegisteredDelivery
+
+	// Save the updated message
+	err = mh.smsStorage.UpdateSMS(ctx, message)
+	if err != nil {
+		if mh.logger != nil {
+			mh.logger.Error("Failed to update message for replacement",
+				"message_id", messageID,
+				"error", err)
+		}
+		return &ReplaceSMResp{}, nil
+	}
+
+	if mh.logger != nil {
+		mh.logger.Info("Message replaced successfully",
+			"message_id", messageID)
+	}
+
+	return &ReplaceSMResp{}, nil
+}
+
+// HandleCancelSM processes a cancel_sm PDU
+func (mh *MessageHandlerImpl) HandleCancelSM(ctx context.Context, session *Session, pdu *CancelSM) (*CancelSMResp, error) {
+	messageID := pdu.MessageID.GetString()
+
+	if mh.logger != nil {
+		mh.logger.Info("Received cancel_sm",
+			"session_id", session.ID,
+			"message_id", messageID,
+			"source_addr", pdu.SourceAddr.GetString())
+	}
+
+	// Get the message to cancel
+	_, err := mh.smsStorage.GetSMS(ctx, messageID)
+	if err != nil {
+		if mh.logger != nil {
+			mh.logger.Warn("Message not found for cancellation",
+				"message_id", messageID,
+				"error", err)
+		}
+		return &CancelSMResp{}, nil // Empty response for not found
+	}
+
+	// Check if message can be cancelled (must be in enroute state)
+	report, _ := mh.reportStorage.GetReport(ctx, messageID)
+	if report != nil && report.Status != "ACCEPTD" && report.Status != "ENROUTE" {
+		if mh.logger != nil {
+			mh.logger.Warn("Message cannot be cancelled - not in enroute state",
+				"message_id", messageID,
+				"status", report.Status)
+		}
+		return &CancelSMResp{}, nil
+	}
+
+	// Delete the message
+	err = mh.smsStorage.DeleteSMS(ctx, messageID)
+	if err != nil {
+		if mh.logger != nil {
+			mh.logger.Error("Failed to delete message for cancellation",
+				"message_id", messageID,
+				"error", err)
+		}
+		return &CancelSMResp{}, nil
+	}
+
+	if mh.logger != nil {
+		mh.logger.Info("Message cancelled successfully",
+			"message_id", messageID)
+	}
+
+	return &CancelSMResp{}, nil
+}
+
+// HandleSubmitMulti processes a submit_multi PDU
+func (mh *MessageHandlerImpl) HandleSubmitMulti(ctx context.Context, session *Session, pdu *SubmitMulti) (*SubmitMultiResp, error) {
+	// Generate base message ID
+	baseMessageID := mh.generateMessageID()
+
+	// Get message bytes from ShortMessage or message_payload
+	var messageBytes []byte
+	if len(pdu.ShortMessage) > 0 {
+		messageBytes = pdu.ShortMessage
+	} else {
+		// Check for message_payload optional parameter
+		for _, param := range pdu.OptionalParameters {
+			if param.Tag == TagMessagePayload {
+				messageBytes = param.Value
+				break
+			}
+		}
+	}
+
+	if len(messageBytes) == 0 {
+		emptyID := NewCString(65)
+		emptyID.SetString("")
+		return &SubmitMultiResp{MessageID: *emptyID, NoUnsuccess: uint8(len(pdu.DestAddresses))}, fmt.Errorf("no message content provided")
+	}
+
+	// Decode message text
+	messageText, err := mh.textEncoder.Decode(messageBytes, pdu.DataCoding)
+	if err != nil {
+		if mh.logger != nil {
+			mh.logger.Error("Failed to decode message text",
+				"data_coding", pdu.DataCoding,
+				"error", err)
+		}
+		emptyID := NewCString(65)
+		emptyID.SetString("")
+		return &SubmitMultiResp{MessageID: *emptyID, NoUnsuccess: uint8(len(pdu.DestAddresses))}, fmt.Errorf("failed to decode message: %w", err)
+	}
+
+	var unsuccessfulSMEs []UnsuccessfulSME
+	var successfulCount int
+
+	// Process each destination
+	for i, dest := range pdu.DestAddresses {
+		messageID := fmt.Sprintf("%s-%d", baseMessageID, i+1)
+
+		var destAddr Address
+		if dest.DestFlag == 1 { // Individual SME address
+			destAddr = Address{
+				TON:  dest.DestAddrTON,
+				NPI:  dest.DestAddrNPI,
+				Addr: dest.DestinationAddr.GetString(),
+			}
+		} else if dest.DestFlag == 2 { // Distribution list
+			// For distribution lists, we'd need to expand the list
+			// For now, treat as unsuccessful
+			unsuccessfulSMEs = append(unsuccessfulSMEs, UnsuccessfulSME{
+				DestAddrTON:     dest.DestAddrTON,
+				DestAddrNPI:     dest.DestAddrNPI,
+				DestinationAddr: dest.DestinationAddr,
+				ErrorStatusCode: StatusInvDstAdr,
+			})
+			continue
+		} else {
+			// Invalid destination flag
+			unsuccessfulSMEs = append(unsuccessfulSMEs, UnsuccessfulSME{
+				DestAddrTON:     dest.DestAddrTON,
+				DestAddrNPI:     dest.DestAddrNPI,
+				DestinationAddr: dest.DestinationAddr,
+				ErrorStatusCode: StatusInvDstAdr,
+			})
+			continue
+		}
+
+		// Create message object
+		message := &Message{
+			ID:        messageID,
+			SessionID: session.ID,
+			SourceAddr: Address{
+				TON:  pdu.SourceAddr.TON,
+				NPI:  pdu.SourceAddr.NPI,
+				Addr: pdu.SourceAddr.Addr,
+			},
+			DestAddr:             destAddr,
+			ShortMessage:         pdu.ShortMessage,
+			DataCoding:           pdu.DataCoding,
+			EsmClass:             pdu.ESMClass,
+			RegisteredDelivery:   pdu.RegisteredDelivery,
+			ValidityPeriod:       pdu.ValidityPeriod.GetString(),
+			ScheduleDeliveryTime: pdu.ScheduleDeliveryTime.GetString(),
+			ServiceType:          pdu.ServiceType.GetString(),
+			ProtocolID:           pdu.ProtocolID,
+			PriorityFlag:         pdu.PriorityFlag,
+			Status:               MessageStatusSubmitted,
+			SubmitTime:           time.Now(),
+			Text:                 messageText,
+		}
+
+		// Validate message
+		if err := mh.ValidateMessage(ctx, message); err != nil {
+			if mh.logger != nil {
+				mh.logger.Warn("Message validation failed",
+					"message_id", messageID,
+					"error", err)
+			}
+			unsuccessfulSMEs = append(unsuccessfulSMEs, UnsuccessfulSME{
+				DestAddrTON:     dest.DestAddrTON,
+				DestAddrNPI:     dest.DestAddrNPI,
+				DestinationAddr: dest.DestinationAddr,
+				ErrorStatusCode: StatusInvMsgLen,
+			})
+			continue
+		}
+
+		// Store message
+		if mh.smsStorage != nil {
+			if _, err := mh.smsStorage.StoreSMS(ctx, message); err != nil {
+				if mh.logger != nil {
+					mh.logger.Error("Failed to store SMS",
+						"message_id", messageID,
+						"error", err)
+				}
+				unsuccessfulSMEs = append(unsuccessfulSMEs, UnsuccessfulSME{
+					DestAddrTON:     dest.DestAddrTON,
+					DestAddrNPI:     dest.DestAddrNPI,
+					DestinationAddr: dest.DestinationAddr,
+					ErrorStatusCode: StatusSysErr,
+				})
+				continue
+			}
+		}
+
+		successfulCount++
+
+		// Log successful submission
+		if mh.logger != nil {
+			mh.logger.Info("SMS submitted successfully (multi)",
+				"message_id", messageID,
+				"source", pdu.SourceAddr.Addr,
+				"dest", destAddr.Addr,
+				"data_coding", pdu.DataCoding,
+				"text_length", len(messageText),
+				"session_id", session.ID)
+		}
+
+		// Publish SMS event
+		if mh.eventPublisher != nil {
+			event := &SMSEvent{
+				Type:      EventTypeSMSSubmitted,
+				Timestamp: time.Now(),
+				MessageID: messageID,
+				Session:   session,
+				Message:   message,
+				Data:      make(map[string]interface{}),
+			}
+			mh.eventPublisher.PublishSMSEvent(ctx, event)
+		}
+
+		// Process message for delivery (asynchronously)
+		go func(msg *Message, msgID string) {
+			if err := mh.ProcessMessage(context.Background(), msg); err != nil {
+				if mh.logger != nil {
+					mh.logger.Error("Failed to process message for delivery",
+						"message_id", msgID,
+						"error", err)
+				}
+			}
+		}(message, messageID)
+	}
+
+	// Create response
+	messageIDCStr := NewCString(65)
+	messageIDCStr.SetString(baseMessageID)
+
+	response := &SubmitMultiResp{
+		MessageID:    *messageIDCStr,
+		NoUnsuccess:  uint8(len(unsuccessfulSMEs)),
+		UnsuccessSME: unsuccessfulSMEs,
+	}
+
+	if mh.logger != nil {
+		mh.logger.Info("Submit multi completed",
+			"base_message_id", baseMessageID,
+			"total_destinations", len(pdu.DestAddresses),
+			"successful", successfulCount,
+			"unsuccessful", len(unsuccessfulSMEs))
+	}
+
+	return response, nil
+}
+
+// HandleDataSM processes a data_sm PDU
+func (mh *MessageHandlerImpl) HandleDataSM(ctx context.Context, session *Session, pdu *DataSM) (*DataSMResp, error) {
+	// Generate message ID
+	messageID := mh.generateMessageID()
+
+	if mh.logger != nil {
+		mh.logger.Info("Received data_sm",
+			"session_id", session.ID,
+			"message_id", messageID,
+			"source", pdu.SourceAddr.Addr,
+			"dest", pdu.DestAddr.Addr)
+	}
+
+	// For data_sm, the message content is in optional parameters
+	// Look for message_payload parameter
+	var messageBytes []byte
+	for _, param := range pdu.OptionalParameters {
+		if param.Tag == TagMessagePayload {
+			messageBytes = param.Value
+			break
+		}
+	}
+
+	if len(messageBytes) == 0 {
+		if mh.logger != nil {
+			mh.logger.Warn("No message content in data_sm",
+				"message_id", messageID)
+		}
+		// For data_sm, empty content is allowed
+		messageBytes = []byte{}
+	}
+
+	// Decode message text
+	messageText, err := mh.textEncoder.Decode(messageBytes, pdu.DataCoding)
+	if err != nil {
+		if mh.logger != nil {
+			mh.logger.Error("Failed to decode message text",
+				"message_id", messageID,
+				"data_coding", pdu.DataCoding,
+				"error", err)
+		}
+		return &DataSMResp{MessageID: *NewCString(65)}, nil // Return empty message ID on error
+	}
+
+	// Create message object
+	message := &Message{
+		ID:        messageID,
+		SessionID: session.ID,
+		SourceAddr: Address{
+			TON:  pdu.SourceAddr.TON,
+			NPI:  pdu.SourceAddr.NPI,
+			Addr: pdu.SourceAddr.Addr,
+		},
+		DestAddr: Address{
+			TON:  pdu.DestAddr.TON,
+			NPI:  pdu.DestAddr.NPI,
+			Addr: pdu.DestAddr.Addr,
+		},
+		DataCoding:         pdu.DataCoding,
+		EsmClass:           pdu.ESMClass,
+		RegisteredDelivery: pdu.RegisteredDelivery,
+		Status:             MessageStatusSubmitted,
+		SubmitTime:         time.Now(),
+		Text:               messageText,
+	}
+
+	// Validate message
+	if err := mh.ValidateMessage(ctx, message); err != nil {
+		if mh.logger != nil {
+			mh.logger.Warn("Message validation failed",
+				"message_id", messageID,
+				"error", err)
+		}
+		return &DataSMResp{MessageID: *NewCString(65)}, nil
+	}
+
+	// Store message
+	if mh.smsStorage != nil {
+		if _, err := mh.smsStorage.StoreSMS(ctx, message); err != nil {
+			if mh.logger != nil {
+				mh.logger.Error("Failed to store SMS",
+					"message_id", messageID,
+					"error", err)
+			}
+			return &DataSMResp{MessageID: *NewCString(65)}, nil
+		}
+	}
+
+	// Log successful submission
+	if mh.logger != nil {
+		mh.logger.Info("Data message submitted successfully",
+			"message_id", messageID,
+			"source", pdu.SourceAddr.Addr,
+			"dest", pdu.DestAddr.Addr,
+			"data_coding", pdu.DataCoding,
+			"text_length", len(messageText),
+			"session_id", session.ID)
+	}
+
+	// Publish SMS event
+	if mh.eventPublisher != nil {
+		event := &SMSEvent{
+			Type:      EventTypeSMSSubmitted,
+			Timestamp: time.Now(),
+			MessageID: messageID,
+			Session:   session,
+			Message:   message,
+			Data:      make(map[string]interface{}),
+		}
+		mh.eventPublisher.PublishSMSEvent(ctx, event)
+	}
+
+	// Process message for delivery (asynchronously)
+	go func() {
+		if err := mh.ProcessMessage(context.Background(), message); err != nil {
+			if mh.logger != nil {
+				mh.logger.Error("Failed to process message for delivery",
+					"message_id", messageID,
+					"error", err)
+			}
+		}
+	}()
+
+	messageIDCStr := NewCString(65)
+	messageIDCStr.SetString(messageID)
+
+	return &DataSMResp{MessageID: *messageIDCStr}, nil
+}
+
 // HandleDeliverSM processes a deliver_sm PDU
 func (mh *MessageHandlerImpl) HandleDeliverSM(ctx context.Context, session *Session, pdu *DeliverSM) (*DeliverSMResp, error) {
 	messageID := mh.generateMessageID()

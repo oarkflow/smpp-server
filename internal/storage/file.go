@@ -94,6 +94,37 @@ func (fs *FileSMSStorage) GetSMS(ctx context.Context, messageID string) (*smpp.M
 	return &messageCopy, nil
 }
 
+// UpdateSMS updates an SMS message
+func (fs *FileSMSStorage) UpdateSMS(ctx context.Context, message *smpp.Message) error {
+	if message == nil || message.ID == "" {
+		return fmt.Errorf("message and message ID cannot be empty")
+	}
+
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	_, exists := fs.messages[message.ID]
+	if !exists {
+		return fmt.Errorf("message with ID %s not found", message.ID)
+	}
+
+	// Store a copy to avoid external modifications
+	messageCopy := *message
+	fs.messages[message.ID] = &messageCopy
+
+	// Persist to file
+	if err := fs.saveMessage(&messageCopy); err != nil {
+		return fmt.Errorf("failed to save message to file: %w", err)
+	}
+
+	if fs.logger != nil {
+		fs.logger.Debug("SMS updated in file",
+			"message_id", message.ID)
+	}
+
+	return nil
+}
+
 // UpdateSMSStatus updates the status of an SMS message
 func (fs *FileSMSStorage) UpdateSMSStatus(ctx context.Context, messageID string, status smpp.MessageStatus) error {
 	if messageID == "" {

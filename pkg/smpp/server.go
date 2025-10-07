@@ -2,6 +2,7 @@ package smpp
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"sync"
@@ -74,19 +75,52 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Create listener
 	addr := fmt.Sprintf("%s:%d", s.config.Host, s.config.Port)
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		s.mu.Lock()
-		s.running = false
-		s.mu.Unlock()
-		return fmt.Errorf("failed to listen on %s: %w", addr, err)
+	var listener net.Listener
+	var err error
+
+	if s.config.TLSEnabled {
+		// Load TLS certificate
+		cert, err := tls.LoadX509KeyPair(s.config.TLSCertFile, s.config.TLSKeyFile)
+		if err != nil {
+			s.mu.Lock()
+			s.running = false
+			s.mu.Unlock()
+			return fmt.Errorf("failed to load TLS certificate: %w", err)
+		}
+
+		// Create TLS config
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			ServerName:   s.config.Host,
+		}
+
+		// Create TLS listener
+		listener, err = tls.Listen("tcp", addr, tlsConfig)
+		if err != nil {
+			s.mu.Lock()
+			s.running = false
+			s.mu.Unlock()
+			return fmt.Errorf("failed to listen on %s with TLS: %w", addr, err)
+		}
+
+		if s.logger != nil {
+			s.logger.Info("SMPP server started with TLS", "address", addr, "cert_file", s.config.TLSCertFile)
+		}
+	} else {
+		listener, err = net.Listen("tcp", addr)
+		if err != nil {
+			s.mu.Lock()
+			s.running = false
+			s.mu.Unlock()
+			return fmt.Errorf("failed to listen on %s: %w", addr, err)
+		}
+
+		if s.logger != nil {
+			s.logger.Info("SMPP server started", "address", addr)
+		}
 	}
 
 	s.listener = listener
-
-	if s.logger != nil {
-		s.logger.Info("SMPP server started", "address", addr)
-	}
 
 	// Start accepting connections
 	s.wg.Add(1)
@@ -403,6 +437,16 @@ func (s *Server) handlePDU(ctx context.Context, session *Session, pdu *PDU) (*PD
 			s.logger.Info("Routing to handleSubmitSM", "sequence", originalSeqNum)
 		}
 		return s.handleSubmitSM(ctx, session, pdu.Body.(*SubmitSM), originalSeqNum)
+	case CommandQuerySM:
+		return s.handleQuerySM(ctx, session, pdu.Body.(*QuerySM), originalSeqNum)
+	case CommandReplaceSM:
+		return s.handleReplaceSM(ctx, session, pdu.Body.(*ReplaceSM), originalSeqNum)
+	case CommandCancelSM:
+		return s.handleCancelSM(ctx, session, pdu.Body.(*CancelSM), originalSeqNum)
+	case CommandSubmitMulti:
+		return s.handleSubmitMulti(ctx, session, pdu.Body.(*SubmitMulti), originalSeqNum)
+	case CommandDataSM:
+		return s.handleDataSM(ctx, session, pdu.Body.(*DataSM), originalSeqNum)
 	case CommandDeliverSMResp:
 		return s.handleDeliverSMResp(ctx, session, pdu.Body.(*DeliverSMResp))
 	case CommandEnquireLink:
@@ -541,6 +585,185 @@ func (s *Server) handleSubmitSM(ctx context.Context, session *Session, req *Subm
 	return &PDU{
 		Header: PDUHeader{
 			CommandID:     CommandSubmitSMResp,
+			CommandStatus: StatusOK,
+			SequenceNum:   sequenceNum,
+		},
+		Body: response,
+	}, nil
+}
+
+// handleQuerySM handles query_sm PDU
+func (s *Server) handleQuerySM(ctx context.Context, session *Session, req *QuerySM, sequenceNum uint32) (*PDU, error) {
+	if s.logger != nil {
+		s.logger.Info("Received query_sm",
+			"session_id", session.ID,
+			"sequence", sequenceNum,
+			"message_id", req.MessageID.GetString())
+	}
+
+	// Check if session is bound
+	if session.State != SessionStateBoundRX && session.State != SessionStateBoundTRX {
+		return s.builder.BuildQuerySMResp(req.MessageID, "", 0, 0, sequenceNum, StatusInvBnd), nil
+	}
+
+	// Use message handler to process the query_sm
+	response, err := s.messageHandler.HandleQuerySM(ctx, session, req)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Error("Error handling query_sm",
+				"session_id", session.ID,
+				"message_id", req.MessageID.GetString(),
+				"error", err)
+		}
+		return s.builder.BuildQuerySMResp(req.MessageID, "", 0, 0, sequenceNum, StatusSysErr), nil
+	}
+
+	return &PDU{
+		Header: PDUHeader{
+			CommandID:     CommandQuerySMResp,
+			CommandStatus: StatusOK,
+			SequenceNum:   sequenceNum,
+		},
+		Body: response,
+	}, nil
+}
+
+// handleReplaceSM handles replace_sm PDU
+func (s *Server) handleReplaceSM(ctx context.Context, session *Session, req *ReplaceSM, sequenceNum uint32) (*PDU, error) {
+	if s.logger != nil {
+		s.logger.Info("Received replace_sm",
+			"session_id", session.ID,
+			"sequence", sequenceNum,
+			"message_id", req.MessageID.GetString())
+	}
+
+	// Check if session is bound for transmission
+	if session.State != SessionStateBoundTX && session.State != SessionStateBoundTRX {
+		return s.builder.BuildReplaceSMResp(sequenceNum, StatusInvBnd), nil
+	}
+
+	// Use message handler to process the replace_sm
+	response, err := s.messageHandler.HandleReplaceSM(ctx, session, req)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Error("Error handling replace_sm",
+				"session_id", session.ID,
+				"message_id", req.MessageID.GetString(),
+				"error", err)
+		}
+		return s.builder.BuildReplaceSMResp(sequenceNum, StatusSysErr), nil
+	}
+
+	return &PDU{
+		Header: PDUHeader{
+			CommandID:     CommandReplaceSMResp,
+			CommandStatus: StatusOK,
+			SequenceNum:   sequenceNum,
+		},
+		Body: response,
+	}, nil
+}
+
+// handleCancelSM handles cancel_sm PDU
+func (s *Server) handleCancelSM(ctx context.Context, session *Session, req *CancelSM, sequenceNum uint32) (*PDU, error) {
+	if s.logger != nil {
+		s.logger.Info("Received cancel_sm",
+			"session_id", session.ID,
+			"sequence", sequenceNum,
+			"message_id", req.MessageID.GetString())
+	}
+
+	// Check if session is bound for transmission
+	if session.State != SessionStateBoundTX && session.State != SessionStateBoundTRX {
+		return s.builder.BuildCancelSMResp(sequenceNum, StatusInvBnd), nil
+	}
+
+	// Use message handler to process the cancel_sm
+	response, err := s.messageHandler.HandleCancelSM(ctx, session, req)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Error("Error handling cancel_sm",
+				"session_id", session.ID,
+				"message_id", req.MessageID.GetString(),
+				"error", err)
+		}
+		return s.builder.BuildCancelSMResp(sequenceNum, StatusSysErr), nil
+	}
+
+	return &PDU{
+		Header: PDUHeader{
+			CommandID:     CommandCancelSMResp,
+			CommandStatus: StatusOK,
+			SequenceNum:   sequenceNum,
+		},
+		Body: response,
+	}, nil
+}
+
+// handleSubmitMulti handles submit_multi PDU
+func (s *Server) handleSubmitMulti(ctx context.Context, session *Session, req *SubmitMulti, sequenceNum uint32) (*PDU, error) {
+	if s.logger != nil {
+		s.logger.Info("Received submit_multi",
+			"session_id", session.ID,
+			"sequence", sequenceNum,
+			"dest_count", req.NumberOfDests)
+	}
+
+	// Check if session is bound for transmission
+	if session.State != SessionStateBoundTX && session.State != SessionStateBoundTRX {
+		return s.builder.BuildSubmitMultiResp("", nil, sequenceNum, StatusInvBnd), nil
+	}
+
+	// Use message handler to process the submit_multi
+	response, err := s.messageHandler.HandleSubmitMulti(ctx, session, req)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Error("Error handling submit_multi",
+				"session_id", session.ID,
+				"error", err)
+		}
+		return s.builder.BuildSubmitMultiResp("", nil, sequenceNum, StatusSysErr), nil
+	}
+
+	return &PDU{
+		Header: PDUHeader{
+			CommandID:     CommandSubmitMultiResp,
+			CommandStatus: StatusOK,
+			SequenceNum:   sequenceNum,
+		},
+		Body: response,
+	}, nil
+}
+
+// handleDataSM handles data_sm PDU
+func (s *Server) handleDataSM(ctx context.Context, session *Session, req *DataSM, sequenceNum uint32) (*PDU, error) {
+	if s.logger != nil {
+		s.logger.Info("Received data_sm",
+			"session_id", session.ID,
+			"sequence", sequenceNum,
+			"source", req.SourceAddr.Addr,
+			"dest", req.DestAddr.Addr)
+	}
+
+	// Check if session is bound for transmission
+	if session.State != SessionStateBoundTX && session.State != SessionStateBoundTRX {
+		return s.builder.BuildDataSMResp("", sequenceNum, StatusInvBnd), nil
+	}
+
+	// Use message handler to process the data_sm
+	response, err := s.messageHandler.HandleDataSM(ctx, session, req)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Error("Error handling data_sm",
+				"session_id", session.ID,
+				"error", err)
+		}
+		return s.builder.BuildDataSMResp("", sequenceNum, StatusSysErr), nil
+	}
+
+	return &PDU{
+		Header: PDUHeader{
+			CommandID:     CommandDataSMResp,
 			CommandStatus: StatusOK,
 			SequenceNum:   sequenceNum,
 		},

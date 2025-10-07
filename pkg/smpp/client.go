@@ -2,6 +2,7 @@ package smpp
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strings"
@@ -79,13 +80,37 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 
 	// Create connection with timeout
-	dialer := &net.Dialer{
-		Timeout: c.config.ConnectTimeout,
-	}
+	var conn net.Conn
+	var err error
 
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return fmt.Errorf("failed to connect to %s: %w", addr, err)
+	if c.config.TLSEnabled {
+		// Create TLS config
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: c.config.TLSSkipVerify,
+			ServerName:         c.config.Host,
+		}
+
+		// Create TLS dialer
+		dialer := &tls.Dialer{
+			NetDialer: &net.Dialer{
+				Timeout: c.config.ConnectTimeout,
+			},
+			Config: tlsConfig,
+		}
+
+		conn, err = dialer.DialContext(ctx, "tcp", addr)
+		if err != nil {
+			return fmt.Errorf("failed to connect to %s with TLS: %w", addr, err)
+		}
+	} else {
+		dialer := &net.Dialer{
+			Timeout: c.config.ConnectTimeout,
+		}
+
+		conn, err = dialer.DialContext(ctx, "tcp", addr)
+		if err != nil {
+			return fmt.Errorf("failed to connect to %s: %w", addr, err)
+		}
 	}
 
 	c.mu.Lock()
@@ -100,7 +125,11 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.mu.Unlock()
 
 	if c.logger != nil {
-		c.logger.Info("Connected to SMPP server", "address", addr, "session_id", c.session.ID)
+		if c.config.TLSEnabled {
+			c.logger.Info("Connected to SMPP server with TLS", "address", addr, "session_id", c.session.ID)
+		} else {
+			c.logger.Info("Connected to SMPP server", "address", addr, "session_id", c.session.ID)
+		}
 	}
 
 	// Start goroutines for handling

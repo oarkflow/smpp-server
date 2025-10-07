@@ -105,6 +105,63 @@ type QuerySM struct {
 	SourceAddr Address `json:"source_addr"`
 }
 
+func (q *QuerySM) Marshal() ([]byte, error) {
+	buf := new(bytes.Buffer)
+
+	// Write message_id
+	messageIDData, err := q.MessageID.Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal message_id: %w", err)
+	}
+	buf.Write(messageIDData)
+
+	// Write source address
+	srcAddrData, err := q.SourceAddr.Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal source address: %w", err)
+	}
+	buf.Write(srcAddrData)
+
+	return buf.Bytes(), nil
+}
+
+func (q *QuerySM) Unmarshal(data []byte) error {
+	offset := 0
+
+	// Read message_id (max 64 bytes)
+	if offset+MaxMessageIDLength > len(data) {
+		return fmt.Errorf("insufficient data for message_id")
+	}
+	q.MessageID = CString{Data: make([]byte, 0, MaxMessageIDLength)}
+	copy(q.MessageID.Data, data[offset:offset+MaxMessageIDLength])
+	// Trim null terminator
+	if nullIdx := bytes.IndexByte(q.MessageID.Data, 0); nullIdx >= 0 {
+		q.MessageID.Data = q.MessageID.Data[:nullIdx]
+	}
+	offset += MaxMessageIDLength
+
+	// Read source address (2 bytes TON/NPI + 21 bytes addr + 1 null)
+	if offset+23 > len(data) {
+		return fmt.Errorf("insufficient data for source address")
+	}
+	q.SourceAddr.TON = data[offset]
+	q.SourceAddr.NPI = data[offset+1]
+	offset += 2
+
+	addrLen := bytes.IndexByte(data[offset:offset+MaxAddressLength+1], 0)
+	if addrLen < 0 {
+		addrLen = MaxAddressLength
+	}
+	q.SourceAddr.Addr = string(data[offset : offset+addrLen])
+	offset += MaxAddressLength + 1
+
+	return nil
+}
+
+func (q *QuerySM) CommandID() uint32 {
+	return CommandQuerySM
+}
+
 // QuerySMResp represents a query_sm_resp PDU
 type QuerySMResp struct {
 	MessageID    CString `json:"message_id"`
@@ -163,6 +220,20 @@ type SubmitMulti struct {
 	OptionalParameters   []OptionalParameter  `json:"optional_parameters"`
 }
 
+func (s *SubmitMulti) Marshal() ([]byte, error) {
+	// TODO: Implement proper marshaling
+	return nil, fmt.Errorf("marshal not implemented for SubmitMulti")
+}
+
+func (s *SubmitMulti) Unmarshal(data []byte) error {
+	// TODO: Implement unmarshaling
+	return fmt.Errorf("unmarshal not implemented for SubmitMulti")
+}
+
+func (s *SubmitMulti) CommandID() uint32 {
+	return CommandSubmitMulti
+}
+
 // DestinationAddress represents a destination address for submit_multi
 type DestinationAddress struct {
 	DestFlag        uint8   `json:"dest_flag"`
@@ -177,6 +248,66 @@ type SubmitMultiResp struct {
 	MessageID    CString           `json:"message_id"`
 	NoUnsuccess  uint8             `json:"no_unsuccess"`
 	UnsuccessSME []UnsuccessfulSME `json:"unsuccess_sme"`
+}
+
+func (s *SubmitMultiResp) Marshal() ([]byte, error) {
+	buf := new(bytes.Buffer)
+
+	// Message ID
+	messageIDBytes, err := s.MessageID.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	buf.Write(messageIDBytes)
+
+	// No unsuccessful
+	buf.WriteByte(s.NoUnsuccess)
+
+	// Unsuccessful SMEs (for now, assume none)
+	// TODO: Implement proper marshaling of UnsuccessfulSME array
+
+	return buf.Bytes(), nil
+}
+
+func (s *SubmitMultiResp) Unmarshal(data []byte) error {
+	// TODO: Implement unmarshaling
+	return fmt.Errorf("unmarshal not implemented for SubmitMultiResp")
+}
+
+func (s *SubmitMultiResp) CommandID() uint32 {
+	return CommandSubmitMultiResp
+}
+
+func (d *DataSM) CommandID() uint32 {
+	return CommandDataSM
+}
+
+func (d *DataSMResp) CommandID() uint32 {
+	return CommandDataSMResp
+}
+
+func (b *BroadcastSM) CommandID() uint32 {
+	return CommandBroadcastSM
+}
+
+func (b *BroadcastSMResp) CommandID() uint32 {
+	return CommandBroadcastSMResp
+}
+
+func (q *QueryBroadcastSM) CommandID() uint32 {
+	return CommandQueryBroadcastSM
+}
+
+func (q *QueryBroadcastSMResp) CommandID() uint32 {
+	return CommandQueryBroadcastSMResp
+}
+
+func (c *CancelBroadcastSM) CommandID() uint32 {
+	return CommandCancelBroadcastSM
+}
+
+func (c *CancelBroadcastSMResp) CommandID() uint32 {
+	return CommandCancelBroadcastSMResp
 }
 
 // UnsuccessfulSME represents an unsuccessful SME in submit_multi_resp
@@ -209,6 +340,41 @@ type DataSM struct {
 type DataSMResp struct {
 	MessageID          CString             `json:"message_id"`
 	OptionalParameters []OptionalParameter `json:"optional_parameters"`
+}
+
+func (d *DataSM) Marshal() ([]byte, error) {
+	// TODO: Implement proper marshaling
+	return nil, fmt.Errorf("marshal not implemented for DataSM")
+}
+
+func (d *DataSM) Unmarshal(data []byte) error {
+	// TODO: Implement unmarshaling
+	return fmt.Errorf("unmarshal not implemented for DataSM")
+}
+
+func (d *DataSMResp) Marshal() ([]byte, error) {
+	buf := new(bytes.Buffer)
+
+	// Message ID
+	messageIDBytes, err := d.MessageID.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	buf.Write(messageIDBytes)
+
+	// Optional parameters
+	for _, param := range d.OptionalParameters {
+		binary.Write(buf, binary.BigEndian, param.Tag)
+		binary.Write(buf, binary.BigEndian, param.Length)
+		buf.Write(param.Value)
+	}
+
+	return buf.Bytes(), nil
+}
+
+func (d *DataSMResp) Unmarshal(data []byte) error {
+	// TODO: Implement unmarshaling
+	return fmt.Errorf("unmarshal not implemented for DataSMResp")
 }
 
 // Outbind represents an outbind PDU
@@ -277,41 +443,6 @@ type CancelBroadcastSMResp struct {
 
 // Marshal methods for new PDUs
 
-// Marshal serializes QuerySM to bytes
-func (q *QuerySM) Marshal() ([]byte, error) {
-	var buf []byte
-
-	msgIDBytes, err := q.MessageID.Marshal()
-	if err != nil {
-		return nil, err
-	}
-	buf = append(buf, msgIDBytes...)
-
-	addrBytes, err := q.SourceAddr.Marshal()
-	if err != nil {
-		return nil, err
-	}
-	buf = append(buf, addrBytes...)
-
-	return buf, nil
-}
-
-// Unmarshal deserializes bytes to QuerySM
-func (q *QuerySM) Unmarshal(data []byte) error {
-	offset := 0
-
-	if err := q.MessageID.Unmarshal(data[offset:]); err != nil {
-		return err
-	}
-	offset += q.MessageID.Len()
-
-	if err := q.SourceAddr.Unmarshal(data[offset:]); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // Marshal serializes QuerySMResp to bytes
 func (q *QuerySMResp) Marshal() ([]byte, error) {
 	var buf []byte
@@ -360,6 +491,10 @@ func (q *QuerySMResp) Unmarshal(data []byte) error {
 	q.ErrorCode = data[offset]
 
 	return nil
+}
+
+func (q *QuerySMResp) CommandID() uint32 {
+	return CommandQuerySMResp
 }
 
 // Marshal serializes ReplaceSM to bytes
@@ -449,6 +584,10 @@ func (r *ReplaceSM) Unmarshal(data []byte) error {
 	return nil
 }
 
+func (r *ReplaceSM) CommandID() uint32 {
+	return CommandReplaceSM
+}
+
 // ReplaceSMResp Marshal and Unmarshal (empty PDU)
 func (r *ReplaceSMResp) Marshal() ([]byte, error) {
 	return []byte{}, nil
@@ -456,6 +595,18 @@ func (r *ReplaceSMResp) Marshal() ([]byte, error) {
 
 func (r *ReplaceSMResp) Unmarshal(data []byte) error {
 	return nil
+}
+
+func (r *ReplaceSMResp) CommandID() uint32 {
+	return CommandReplaceSMResp
+}
+
+func (c *CancelSM) CommandID() uint32 {
+	return CommandCancelSM
+}
+
+func (c *CancelSMResp) CommandID() uint32 {
+	return CommandCancelSMResp
 }
 
 // CancelSM Marshal and Unmarshal
