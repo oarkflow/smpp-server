@@ -1,0 +1,61 @@
+{
+    "server": {
+        "host": "0.0.0.0",
+        "port": 2775,
+        "max_connections": 1000,
+        "read_timeout": "60s",
+        "write_timeout": "30s",
+        "idle_timeout": "600s",
+        "enquire_link_timeout": "120s",
+        "bind_timeout": "60s",
+        "tls_enabled": true,
+        "tls_cert_file": "/etc/ssl/certs/smpp.crt",
+        "tls_key_file": "/etc/ssl/private/smpp.key"
+    },
+    "client": {
+        "host": "smsc.provider.com",
+        "port": 2776,
+        "system_id": "prod_system_id",
+        "password": "prod_password",
+        "system_type": "SMPP",
+        "bind_type": "transceiver",
+        "connect_timeout": "30s",
+        "read_timeout": "60s",
+        "write_timeout": "30s",
+        "enquire_link_interval": "60s",
+        "reconnect_interval": "10s",
+        "max_reconnect_attempts": 20,
+        "tls_enabled": true,
+        "tls_skip_verify": false
+    },
+    "logging": {
+        "level": "info",
+        "format": "json",
+        "output": "file",
+        "file": "/var/log/smpp/smpp.log",
+        "max_size": 500,
+        "max_backups": 10,
+        "max_age": 90,
+        "compress": true
+    },
+    "storage": {
+        "type": "database",
+        "data_dir": "/var/lib/smpp",
+        "database": {
+            "driver": "postgres",
+            "host": "db.internal",
+            "port": 5432,
+            "username": "smpp_user",
+            "password": "smpp_secure_password",
+            "database": "smpp_production",
+            "ssl_mode": "require"
+        }
+    },
+    "metrics": {
+        "enabled": true,
+        "port": 9090,
+        "path": "/metrics",
+        "namespace": "smpp",
+        "subsystem": "production"
+    }
+}

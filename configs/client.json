@@ -1,0 +1,61 @@
+{
+    "server": {
+        "host": "localhost",
+        "port": 2775,
+        "max_connections": 10,
+        "read_timeout": "30s",
+        "write_timeout": "10s",
+        "idle_timeout": "300s",
+        "enquire_link_timeout": "60s",
+        "bind_timeout": "30s",
+        "tls_enabled": false,
+        "tls_cert_file": "",
+        "tls_key_file": ""
+    },
+    "client": {
+        "host": "localhost",
+        "port": 2775,
+        "system_id": "client1",
+        "password": "password1",
+        "system_type": "SMPP",
+        "bind_type": "transceiver",
+        "connect_timeout": "10s",
+        "read_timeout": "30s",
+        "write_timeout": "10s",
+        "enquire_link_interval": "30s",
+        "reconnect_interval": "5s",
+        "max_reconnect_attempts": 10,
+        "tls_enabled": false,
+        "tls_skip_verify": false
+    },
+    "logging": {
+        "level": "info",
+        "format": "json",
+        "output": "file",
+        "file": "logs/smpp.log",
+        "max_size": 100,
+        "max_backups": 5,
+        "max_age": 30,
+        "compress": true
+    },
+    "storage": {
+        "type": "file",
+        "data_dir": "./data",
+        "database": {
+            "driver": "postgres",
+            "host": "localhost",
+            "port": 5432,
+            "username": "smpp",
+            "password": "smpp",
+            "database": "smpp",
+            "ssl_mode": "disable"
+        }
+    },
+    "metrics": {
+        "enabled": true,
+        "port": 9090,
+        "path": "/metrics",
+        "namespace": "smpp",
+        "subsystem": "client"
+    }
+}
