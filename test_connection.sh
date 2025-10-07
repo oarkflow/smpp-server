@@ -1,15 +1,12 @@
-#!/bin/bash
-
 echo "Starting SMPP server in background..."
-cd /Users/sujit/Sites/smpp-server
 go run ./examples/full-server/main.go > server.log 2>&1 &
 SERVER_PID=$!
 
 # Wait for server to start
 sleep 3
 
-echo "Starting SMPP client..."
-go run ./examples/full-client/main.go > client.log 2>&1 &
+echo "Starting SMPP simple client..."
+go run ./examples/simple-client/main.go > client.log 2>&1 &
 CLIENT_PID=$!
 
 # Let it run for 15 seconds

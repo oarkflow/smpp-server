@@ -422,11 +422,11 @@ func (mh *MessageHandlerImpl) ProcessMessage(ctx context.Context, message *Messa
 		}
 	}
 
-	// 5. Generate delivery reports if requested (for immediate acceptance)
+	// 5. Generate delivery reports if requested (for immediate delivery simulation)
 	if message.RegisteredDelivery&0x01 != 0 {
 		// For split messages, generate reports for each part
 		for _, msgPart := range messages {
-			report, err := mh.GenerateDeliveryReport(ctx, msgPart, MessageStatusAccepted)
+			report, err := mh.GenerateDeliveryReport(ctx, msgPart, MessageStatusDelivered)
 			if err != nil {
 				if mh.logger != nil {
 					mh.logger.Error("Failed to generate delivery report",
